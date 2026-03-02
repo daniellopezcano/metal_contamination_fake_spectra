@@ -1,0 +1,15 @@
+name: metal-fs
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - h5py
+  - matplotlib
+  - jupyterlab
+  - gsl
+  - mpi4py    # optional; keep if you plan to run mpirun tests
+  - pip:
+      - fake_spectra

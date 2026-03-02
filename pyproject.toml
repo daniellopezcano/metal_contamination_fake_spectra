@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metal-contamination-fake-spectra"
+version = "0.1.0"
+description = "Small utilities to run fake_spectra grids and convergence tests."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "h5py",
+  "matplotlib",
+]
+
+[tool.setuptools]
+packages = ["mcfs"]
