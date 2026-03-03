@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import json
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 
@@ -213,3 +216,72 @@ def two_point_corr_1d(
     )
     xi = two_point_corr_1d_from_precomp(pb, y, center=center, standardize=standardize, eps=eps)
     return pb.r_centers, xi
+
+
+def xi1d_from_gs(
+    gs,
+    *,
+    lines=None,                 # list of (elem, ion, lam); if None -> read from gs.savefile manifest
+    bins=None,
+    n_bins=128,
+    r_min=0.0,
+    r_max=None,
+    periodic_L=None,
+    include_self=False,
+    weights=None,
+    center=True,
+    standardize=False,
+    chunk_size=1 << 15,
+    eps=1e-12,
+):
+    """
+    Compute xi1D for TOTAL absorbed flux:
+        F_tot = exp( - sum_i tau_i )
+    where each tau_i comes from gs.get_tau(elem, ion, lam).
+    """
+
+    # --- if lines not provided, try to detect them from the manifest next to the HDF5 ---
+    if lines is None:
+        h5 = Path(gs.savefile)
+        manifest = h5.with_suffix(h5.suffix + ".json")  # ".hdf5" -> ".hdf5.json"
+        if not manifest.exists():
+            raise FileNotFoundError(
+                f"lines=None but manifest not found:\n  {manifest}\n"
+                "Pass lines=[(...), ...] explicitly, or keep the .hdf5.json manifest next to the file."
+            )
+        with open(manifest, "r", encoding="utf-8") as f:
+            man = json.load(f)
+        lines = [(d["elem"], int(d["ion"]), int(d["lam"])) for d in man["lines"]]
+
+    # --- LOS coordinate in velocity units ---
+    x = jnp.arange(gs.nbins) * gs.dvbin  # [km/s]
+
+    # If user didn't specify periodic_L, default to box length in velocity units
+    if periodic_L is None:
+        periodic_L = float(gs.vmax)
+
+    # --- total optical depth ---
+    tau_tot = jnp.zeros((gs.NumLos, gs.nbins), dtype=jnp.float64)
+    for elem, ion, lam in lines:
+        tau_tot += gs.get_tau(elem, ion, lam)
+
+    # --- flux and xi1D ---
+    F_tot = jnp.exp(-tau_tot)
+
+    r_centers, xi = two_point_corr_1d(
+        jnp.asarray(x),
+        jnp.asarray(F_tot),
+        bins=None if bins is None else jnp.asarray(bins),
+        n_bins=n_bins,
+        r_min=r_min,
+        r_max=r_max,
+        periodic_L=periodic_L,
+        include_self=include_self,
+        weights=None if weights is None else jnp.asarray(weights),
+        center=center,
+        standardize=standardize,
+        chunk_size=chunk_size,
+        eps=eps,
+    )
+
+    return jnp.asarray(r_centers), jnp.asarray(xi), list(lines)
