@@ -1,115 +1,120 @@
-# metal_contamination_fake_spectra
+# Installing `fake_spectra` from source
 
-Small testbed repo to:
-1) Extract **gridded skewers** (HI + metal lines) from TNG snapshots using `fake_spectra`.
-2) Store results in a reproducible way (HDF5 + a tiny JSON manifest).
-3) Run convergence scans over `(simulation, nspec, nbins/resolution, axis)` and later compute P1D.
+This guide installs the **fake_spectra** package from a local clone using a dedicated **conda environment**.
 
-## Environment setup (conda) + local fake_spectra install (with multi-CPU support)
+---
 
-These steps create a clean conda environment, install the required dependencies,
-and then compile/install `fake_spectra` from the **local clone** at:
+# 1. Define repository path
 
-`/home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/fake_spectra`
-
-### 0) Preconditions (what fake_spectra needs)
-- Required Python libs: `numpy`, `h5py` (and `scipy` is listed in setup metadata).
-- Required C library: **GSL** (`gsl-config` must be available at build time).
-- Multi-core within a node: uses **OpenMP** if the compiler supports it.
-- Multi-node / multi-process: optional **MPI** via `mpi4py` (run with `mpirun/mpiexec`).
-- Important for IllustrisTNG/Arepo (Voronoi mesh): when using MPI you must pass `kernel="tophat"`
-  to `RandSpectra` / `GriddedSpectra`.
-
-(These points are described in the upstream README and build script.)
-
-### 1) Create the conda environment
-From anywhere:
+Set the path where the repository is cloned.
 
 ```bash
-conda create -n metal-fs -c conda-forge python=3.11 -y
-conda activate metal-fs
+export FAKE_SPECTRA_REPO="/home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/fake_spectra"
+cd $FAKE_SPECTRA_REPO
 ```
 
-### 2) Install core Python stack + build deps
+---
 
-Install scientific packages + build requirements:
+# 2. Create conda environment
+
 ```bash
-conda install -c conda-forge -y \
-  numpy scipy h5py matplotlib jupyterlab \
-  gsl \
-  pip setuptools wheel \
-  compilers make
+conda create -n fake_spectra -c conda-forge python=3.11 -y
+conda activate fake_spectra
 ```
 
-Notes:
-- gsl provides gsl-config needed during compilation.
-- compilers ensures you have a GCC toolchain with OpenMP support inside conda.
+---
 
-### 3) (Optional) Install MPI support in the same env
+# 3. Install dependencies
 
-If you want to run with mpirun and use multiple CPUs across processes:
+Core Python libraries:
+
 ```bash
-conda install -c conda-forge -y openmpi mpi4py
-```
-Quick checks:
-```bash
-which mpirun
-python -c "import mpi4py; print('mpi4py ok')"
+conda install -c conda-forge numpy scipy h5py matplotlib -y
 ```
 
-### 4) Build & install fake_spectra from your local clone
+Required C library:
 
-Go to your local fake_spectra repo and initialize submodules (required by upstream instructions):
 ```bash
-cd /home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/fake_spectra
-git submodule update --init
+conda install -c conda-forge gsl -y
 ```
 
-Now install it into the active conda env.
+Compiler toolchain (required to build the C++ extension):
 
-Recommended (editable install):
 ```bash
+conda install -c conda-forge compilers make pkg-config -y
+```
+
+Optional (MPI support):
+
+```bash
+conda install -c conda-forge mpi4py openmpi -y
+```
+
+---
+
+# 4. Initialize git submodules
+
+```bash
+git submodule update --init --recursive
+```
+
+---
+
+# 5. Install the package
+
+Upgrade build tools and install in editable mode:
+
+```bash
+python -m pip install -U pip setuptools wheel
+python -m pip install -e .
+```
+
+This step compiles the internal C++ extension used by `fake_spectra`.
+
+---
+
+# 5. Install the mcfs package
+```bash
+cd PATH_FOR_metal_contamination_fake_spectra
 pip install -e .
 ```
 
-Alternative (upstream-style install):
+---
+
+# 6. Verify installation
+
+Test that the package imports correctly:
 
 ```bash
-python setup.py build
-python setup.py install
+python -c "import fake_spectra; import fake_spectra.spectra; print('ok', fake_spectra.__file__)"
 ```
 
-### 5) Sanity checks
-
-Check that the compiled extension imports:
-```bash
-python -c "import fake_spectra; import fake_spectra._spectra_priv; print('fake_spectra import OK')"
-```
-
-Check that GSL was visible at build time:
+Check that the compiled module loads:
 
 ```bash
-which gsl-config
-gsl-config --version
+python -c "import fake_spectra._spectra_priv as sp; print('loaded', sp)"
 ```
 
+Check library versions:
 
+```bash
+python -c "import numpy, h5py, scipy; print('numpy', numpy.__version__, 'h5py', h5py.__version__, 'scipy', scipy.__version__)"
+```
 
+```bash
+python -c "from fake_spectra.griddedspectra import GriddedSpectra; print('ok')"
+```
 
+If all commands run without errors, the installation is complete.
 
+---
 
+# 7. Activate environment for use
 
+Whenever using `fake_spectra`, activate the environment:
 
+```bash
+conda activate fake_spectra
+```
 
-
-
-
-
-
-
-
-
-
-
-
-
+---
