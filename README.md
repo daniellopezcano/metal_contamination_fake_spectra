@@ -29,7 +29,7 @@ conda activate fake_spectra
 Core Python libraries:
 
 ```bash
-conda install -c conda-forge numpy scipy h5py matplotlib -y
+conda install -c conda-forge "numpy=1.26.*" scipy h5py matplotlib ipykernel ipympl  -y
 ```
 
 Required C library:
@@ -73,15 +73,22 @@ This step compiles the internal C++ extension used by `fake_spectra`.
 
 ---
 
-# 5. Install the mcfs package
+# 6. Install the mcfs package
 ```bash
 cd PATH_FOR_metal_contamination_fake_spectra
 pip install -e .
 ```
 
+# 7. Register the environment as a Jupyter kernel
+
+This allows you to use the environment directly from Jupyter notebooks.
+```bash
+python -m ipykernel install --user --name fake_spectra --display-name "Python (fake_spectra)"
+```
+
 ---
 
-# 6. Verify installation
+# 8. Verify installation
 
 Test that the package imports correctly:
 
@@ -105,11 +112,15 @@ python -c "import numpy, h5py, scipy; print('numpy', numpy.__version__, 'h5py', 
 python -c "from fake_spectra.griddedspectra import GriddedSpectra; print('ok')"
 ```
 
+```bash
+python -c "import mcfs; print('mcfs ok')"
+```
+
 If all commands run without errors, the installation is complete.
 
 ---
 
-# 7. Activate environment for use
+# 8. Activate environment for use
 
 Whenever using `fake_spectra`, activate the environment:
 
