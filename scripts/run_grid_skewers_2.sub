@@ -1,0 +1,52 @@
+universe   = vanilla
+initialdir = /nfs/pic.es/user/d/dlopezca/Projects/metal_contamination_fake_spectra/scripts
+
+executable = condor_run_grid_skewers.sh
+
+output = logs/grid_mpi-$(ClusterId).$(ProcId).out
+error  = logs/grid_mpi-$(ClusterId).$(ProcId).err
+log    = logs/grid_mpi-$(ClusterId).$(ProcId).event.log
+
+# ---------- Parameters ----------
+base    = /data/desi/scratch/TNG/TNG50-2
+num     = 33
+nspec   = 512
+axis    = 2
+nbins   = 1024
+out_dir = /data/desi/scratch/TNG/SKEWERS/TNG50-2/snapdir_033/axis2
+preset  = lya_si
+kernel  = tophat
+
+# Scale this
+ranks = 24
+
+# ---------- Resources ----------
+request_cpus   = $(ranks)
+
+# conservative memory scaling (see notes above)
+# 16 ranks -> start at 24GB; 32 ranks -> start at 48GB
+request_memory = 512 GB
+request_disk   = 50 GB
+
+# walltime short=3h, medium=48h, long=96h
++flavour = "long"
+
+# Jonás-style: high-mem node property
++WN_property = "tdmem"
+
+# Only if you are in DESI accounting (as Jonás was)
+# +experiment = "desi"
+
++JobBatchName = "grid_skewers_nspec$(nspec)_r$(ranks)_snap$(num)"
+
+# ---------- Environment ----------
+getenv = False
+conda_base  = /nfs/pic.es/user/d/dlopezca/miniconda3
+conda_env   = fake_spectra
+scripts_dir = /nfs/pic.es/user/d/dlopezca/Projects/metal_contamination_fake_spectra/scripts
+
+environment = "CONDA_BASE=$(conda_base) CONDA_ENV=$(conda_env) PROJECT_SCRIPTS_DIR=$(scripts_dir)"
+
+arguments = $(base) $(num) $(nspec) $(axis) $(nbins) $(out_dir) $(preset) $(kernel) $(ranks)
+
+queue
