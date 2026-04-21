@@ -16,7 +16,7 @@ __pycache__/
 
 # Outputs
 outputs/grids/*.hdf5
-outputs/p1d/*.npz
+outputs/P1D/*.npz
 outputs/plots/*
 
 # OS/editor
