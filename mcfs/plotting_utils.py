@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, NullFormatter
+from itertools import combinations
 
 
 # ============================================================
@@ -286,6 +287,140 @@ def _style_tau_axes(
 
 
 # ============================================================
+# Helpers for Xi1D
+# ===========================================================
+
+def _compute_line_pair_markers(line_bundle, *, lag_max, positive_lags_only=True, c_kms=299792.458):
+    """
+    Build vertical-marker metadata for all unique unordered line pairs.
+
+    For each unique pair {i, j}, the separation is defined as
+
+        delta_v_ij = | c_kms * ln(lambda_i / lambda_j) |
+
+    so that (i, j) and (j, i) are treated as the same pair and are not repeated.
+
+    Position convention
+    -------------------
+    - If delta_v_ij <= lag_max, use x = delta_v_ij.
+    - If delta_v_ij > lag_max, use the wrapped position
+          x = lag_max - delta_v_ij
+    - If `positive_lags_only=True`, any negative wrapped position is mapped back
+      into the displayed [0, lag_max] interval so the marker remains visible.
+
+    Marker style convention
+    -----------------------
+    - normal marker  -> dashed   ('--')
+    - wrapped marker -> dotted   (':')
+
+    The displayed text is always the original delta_v value, rounded to 2 decimals,
+    even when the plotted position is wrapped.
+    """
+    if line_bundle is None:
+        return []
+
+    lag_max = float(lag_max)
+    if lag_max <= 0:
+        return []
+
+    markers = []
+
+    for line_i, line_j in combinations(line_bundle.lines, 2):
+        delta_v = float(abs(c_kms * np.log(line_i.lambda0_A / line_j.lambda0_A)))
+
+        wrapped = delta_v > lag_max
+        x = lag_max - delta_v if wrapped else delta_v
+
+        if positive_lags_only:
+            x = x % lag_max
+            if np.isclose(x, 0.0) and not np.isclose(delta_v, 0.0):
+                x = lag_max
+
+        markers.append(
+            {
+                "x": x,
+                "delta_v": delta_v,
+                "text": f"{delta_v:.2f}",
+                "pair": (line_i.id, line_j.id),
+                "wrapped": wrapped,
+                "ls": ":" if wrapped else "--",
+            }
+        )
+
+    markers.sort(key=lambda m: m["x"])
+    return markers
+
+
+def _draw_vertical_markers(
+    ax,
+    markers,
+    *,
+    xlim=None,
+    color="k",
+    lw=0.9,
+    ls="--",
+    alpha=0.35,
+    text_fontsize=18,
+    text_alpha=0.78,
+    show_text=True,
+):
+    """
+    Draw vertical markers and small rotated numeric labels on a given axis.
+
+    Notes
+    -----
+    - If a marker provides its own linestyle in marker["ls"], that overrides `ls`.
+    - The annotation text is taken from marker["text"] when present; otherwise
+      it falls back to marker["delta_v"] formatted to 2 decimals.
+    """
+    if not markers:
+        return
+
+    if xlim is None:
+        xmin, xmax = ax.get_xlim()
+    else:
+        xmin, xmax = xlim
+
+    visible = [m for m in markers if np.isfinite(m["x"]) and xmin <= m["x"] <= xmax]
+    if not visible:
+        return
+
+    visible = sorted(visible, key=lambda m: m["x"])
+
+    y_levels = np.array([0.04, 0.18, 0.32, 0.46, 0.60, 0.74, 0.88])
+    dx = 0.004 * (xmax - xmin) if np.isfinite(xmax - xmin) else 0.0
+
+    for i, marker in enumerate(visible):
+        x = marker["x"]
+        marker_ls = marker.get("ls", ls)
+
+        ax.axvline(x, color=color, lw=lw, ls=marker_ls, alpha=alpha, zorder=1)
+
+        if show_text:
+            y_frac = y_levels[i % len(y_levels)]
+            x_text = min(
+                max(x + dx, xmin + 0.002 * (xmax - xmin)),
+                xmax - 0.002 * (xmax - xmin),
+            )
+
+            txt = marker.get("text", f"{marker.get('delta_v', np.nan):.2f}")
+
+            ax.text(
+                x_text,
+                y_frac,
+                txt,
+                rotation=90,
+                va="bottom",
+                ha="left",
+                transform=ax.get_xaxis_transform(),
+                fontsize=text_fontsize,
+                alpha=text_alpha,
+                color=color,
+                clip_on=True,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.55, pad=0.2),
+            )
+
+# ============================================================
 # Helper for generic 1 main panel + 1 residual panel plots
 # ============================================================
 
@@ -318,6 +453,18 @@ def _plot_main_and_residual(
     legend_title="Runs",
     legend_loc="upper right",
     xlim=None,
+    ylim=None,
+    residual_ylim=None,
+    residual_mode="difference",
+    residual_relative_floor=None,
+    vertical_markers=None,
+    vertical_markers_on_residual=False,
+    vertical_marker_color="k",
+    vertical_marker_lw=0.9,
+    vertical_marker_ls="--",
+    vertical_marker_alpha=0.35,
+    vertical_marker_text_fontsize=18,
+    vertical_marker_text_alpha=0.78,
     show=True,
     tight_layout=True,
     main_labelsize=18,
@@ -348,7 +495,22 @@ def _plot_main_and_residual(
         if key_case != fiducial_key:
             x_sorted, y_sorted, _ = _sort_xy(x, y)
             y_interp = _interp_to_ref_grid(x_ref, x_sorted, y_sorted)
-            x_plot, y_plot, _ = _mask_finite_xy(x_ref, y_interp - y_ref, None)
+
+            if residual_mode == "difference":
+                residual = y_interp - y_ref
+            elif residual_mode == "relative":
+                if residual_relative_floor is None:
+                    denom = np.where(y_ref != 0.0, y_ref, np.nan)
+                else:
+                    denom = np.where(np.abs(y_ref) > residual_relative_floor, y_ref, np.nan)
+                residual = (y_interp - y_ref) / denom
+            else:
+                raise ValueError(
+                    f"Unknown residual_mode={residual_mode!r}. "
+                    "Allowed: 'difference', 'relative'."
+                )
+
+            x_plot, y_plot, _ = _mask_finite_xy(x_ref, residual, None)
 
             if x_plot.size > 0:
                 ax_res.plot(x_plot, y_plot, lw=residual_lw, color=color, alpha=alpha)
@@ -387,6 +549,40 @@ def _plot_main_and_residual(
     if xlim is not None:
         ax_main.set_xlim(*xlim)
         ax_res.set_xlim(*xlim)
+
+    if ylim is not None:
+        ax_main.set_ylim(*ylim)
+
+    if residual_ylim is not None:
+        ax_res.set_ylim(*residual_ylim)
+
+    # Vertical line-pair markers
+    if vertical_markers is not None:
+        _draw_vertical_markers(
+            ax_main,
+            vertical_markers,
+            xlim=xlim,
+            color=vertical_marker_color,
+            lw=vertical_marker_lw,
+            ls=vertical_marker_ls,
+            alpha=vertical_marker_alpha,
+            text_fontsize=vertical_marker_text_fontsize,
+            text_alpha=vertical_marker_text_alpha,
+            show_text=True,
+        )
+        if vertical_markers_on_residual:
+            _draw_vertical_markers(
+                ax_res,
+                vertical_markers,
+                xlim=xlim,
+                color=vertical_marker_color,
+                lw=vertical_marker_lw,
+                ls=vertical_marker_ls,
+                alpha=vertical_marker_alpha,
+                text_fontsize=vertical_marker_text_fontsize,
+                text_alpha=vertical_marker_text_alpha,
+                show_text=False,
+            )
 
     plt.setp(ax_main.get_xticklabels(), visible=False)
 
@@ -607,23 +803,35 @@ def plot_p1d_resolution_comparison(
     residual_lw=1.4,
     alpha=0.82,
     sem_alpha=0.12,
-    xlabel=r"$\omega$",
-    ylabel="P1D",
-    residual_ylabel=r"$\Delta$P1D",
-    xscale="log",
-    yscale="symlog",
-    residual_xscale="log",
-    residual_yscale="symlog",
+    xlabel=r"$k_\parallel \left[ \mathrm{km}^{-1} \mathrm{s} \right]$",
+    ylabel=r"$P_{\mathrm{1D}}\,k_\parallel/\pi$",
+    residual_ylabel=r"$\Delta$",
+    xscale="linear",
+    yscale="log",
+    residual_xscale="linear",
+    residual_yscale="linear",
     main_symlog_linthresh=0.05,
     residual_symlog_linthresh=0.05,
     residual_band=0.05,
-    total_title="Total P1D",
+    max_x=0.045,
+    y_min=None,
+    y_max=None,
+    residual_ylim=None,
+    residual_relative_floor=None,
+    total_title=None,
     legend_loc="upper right",
     show=True,
     tight_layout=True,
 ):
     """
     Plot resolution comparisons for all canonical P1D terms and the total P1D.
+
+    The plotted quantity is:
+        y(k) = P1D(k) * k / pi
+
+    The residual panel shows the relative difference with respect to the
+    fiducial run:
+        (y_case - y_ref) / y_ref
     """
     case_order, fiducial_key = _resolve_case_order(
         avg_P1D_catalog, case_order=case_order, fiducial_key=fiducial_key
@@ -645,6 +853,8 @@ def plot_p1d_resolution_comparison(
     )["total"]
 
     figs = {}
+    xlim = (0.0, max_x) if max_x is not None else None
+    ylim = None if (y_min is None and y_max is None) else (y_min, y_max)
 
     # One figure per canonical term
     for canon in canonical_terms:
@@ -658,12 +868,18 @@ def plot_p1d_resolution_comparison(
         for key_case in case_order:
             if canon not in unique_terms_by_case[key_case]:
                 continue
+
             entry = unique_terms_by_case[key_case][canon]
-            x_by_case[key_case] = np.asarray(omega[key_case], dtype=float)
-            y_by_case[key_case] = np.real(np.asarray(_entry_get(entry, "P1D_mean", "p1d_mean")))
-            yerr_by_case[key_case] = np.asarray(
-                _entry_get(entry, "P1D_sem", "p1d_sem", default=np.zeros_like(y_by_case[key_case]), required=False)
+
+            k_par = np.asarray(omega[key_case], dtype=float)
+            p1d_mean = np.real(np.asarray(_entry_get(entry, "P1D_mean", "p1d_mean")))
+            p1d_sem = np.asarray(
+                _entry_get(entry, "P1D_sem", "p1d_sem", default=np.zeros_like(p1d_mean), required=False)
             )
+
+            x_by_case[key_case] = k_par
+            y_by_case[key_case] = p1d_mean * k_par / np.pi
+            yerr_by_case[key_case] = p1d_sem * k_par / np.pi
 
         case_order_term = [k for k in case_order if k in x_by_case]
 
@@ -685,7 +901,7 @@ def plot_p1d_resolution_comparison(
             main_symlog_linthresh=main_symlog_linthresh,
             residual_symlog_linthresh=residual_symlog_linthresh,
             residual_band=residual_band,
-            draw_main_zero=True,
+            draw_main_zero=False,
             draw_residual_zero=True,
             figsize=figsize,
             main_lw=main_lw,
@@ -694,14 +910,24 @@ def plot_p1d_resolution_comparison(
             sem_alpha=sem_alpha,
             legend_title="Runs",
             legend_loc=legend_loc,
+            xlim=xlim,
+            ylim=ylim,
+            residual_ylim=residual_ylim,
+            residual_mode="relative",
+            residual_relative_floor=residual_relative_floor,
             show=show,
             tight_layout=tight_layout,
         )
         figs[canon] = fig
 
     # Total figure
-    x_by_case = {k: np.asarray(omega_tot[k], dtype=float) for k in case_order}
-    y_by_case = {k: np.real(np.asarray(P1D_tot_mean[k])) for k in case_order}
+    x_by_case = {}
+    y_by_case = {}
+
+    for k in case_order:
+        k_par = np.asarray(omega_tot[k], dtype=float)
+        x_by_case[k] = k_par
+        y_by_case[k] = np.real(np.asarray(P1D_tot_mean[k])) * k_par / np.pi
 
     fig = _plot_main_and_residual(
         x_by_case=x_by_case,
@@ -721,7 +947,7 @@ def plot_p1d_resolution_comparison(
         main_symlog_linthresh=main_symlog_linthresh,
         residual_symlog_linthresh=residual_symlog_linthresh,
         residual_band=residual_band,
-        draw_main_zero=True,
+        draw_main_zero=False,
         draw_residual_zero=True,
         figsize=figsize,
         main_lw=main_lw + 0.1,
@@ -730,13 +956,17 @@ def plot_p1d_resolution_comparison(
         sem_alpha=sem_alpha,
         legend_title="Runs",
         legend_loc=legend_loc,
+        xlim=xlim,
+        ylim=ylim,
+        residual_ylim=residual_ylim,
+        residual_mode="relative",
+        residual_relative_floor=residual_relative_floor,
         show=show,
         tight_layout=tight_layout,
     )
     figs["total"] = fig
 
     return figs
-
 
 # ============================================================
 # Main plotting function: Xi1D
@@ -748,6 +978,7 @@ def plot_xi1d_resolution_comparison(
     lags,
     Xi1D_tot_mean,
     lags_tot,
+    line_bundle=None,
     case_order=None,
     fiducial_key=None,
     term_cmap_names=("Blues", "Greens", "Reds", "Purples", "Oranges", "PuBu", "YlGn", "YlOrBr", "PuRd", "Greys"),
@@ -761,22 +992,48 @@ def plot_xi1d_resolution_comparison(
     sem_alpha=0.12,
     xlabel=r"$\Delta \left[\mathrm{km\,s^{-1}}\right]$",
     ylabel=r"$\xi_{\mathrm{1D}}$",
-    residual_ylabel=r"$\Delta \xi_{\mathrm{1D}}$",
+    residual_ylabel=r"$\Delta$",
     xscale="linear",
     yscale="linear",
     residual_xscale="linear",
-    residual_yscale="symlog",
+    residual_yscale="linear",
     main_symlog_linthresh=0.05,
     residual_symlog_linthresh=0.05,
     residual_band=0.05,
-    total_title="Total Xi1D",
+    max_x=None,
+    y_min=None,
+    y_max=None,
+    residual_ylim=None,
+    residual_relative_floor=1e-14,
+    total_title=None,
     legend_loc="upper right",
     positive_lags_only=True,
+    show_line_pair_markers=True,
+    vertical_markers_on_residual=False,
+    vertical_marker_color="k",
+    vertical_marker_lw=0.9,
+    vertical_marker_ls="--",
+    vertical_marker_alpha=0.35,
+    vertical_marker_text_fontsize=18,
+    vertical_marker_text_alpha=0.78,
     show=True,
     tight_layout=True,
 ):
     """
     Plot resolution comparisons for all canonical Xi1D terms and the total Xi1D.
+
+    Residual panel convention
+    -------------------------
+    The lower panel shows the relative difference with respect to the fiducial run:
+        (y_case - y_ref) / y_ref
+
+    Axis control
+    ------------
+    - If positive_lags_only=True:
+          xlim = (0, max_x_use)
+      where max_x_use is either `max_x` or the full positive lag extent.
+    - If positive_lags_only=False and max_x is not None:
+          xlim = (-max_x, max_x)
     """
     case_order, fiducial_key = _resolve_case_order(
         avg_Xi1D_catalog, case_order=case_order, fiducial_key=fiducial_key
@@ -797,6 +1054,8 @@ def plot_xi1d_resolution_comparison(
         case_order, ["total"], [total_cmap_name], cmin=cmin, cmax=cmax
     )["total"]
 
+    ylim = None if (y_min is None and y_max is None) else (y_min, y_max)
+
     figs = {}
 
     # One figure per canonical term
@@ -805,6 +1064,13 @@ def plot_xi1d_resolution_comparison(
         entry_fid = unique_terms_by_case[fiducial_key][canon]
         lags_fid = np.sort(np.asarray(lags[fiducial_key], dtype=float))
 
+        if positive_lags_only:
+            lag_max_plot = float(np.max(lags_fid)) if max_x is None else min(float(max_x), float(np.max(lags_fid)))
+            xlim = (0.0, lag_max_plot)
+        else:
+            xlim = None if max_x is None else (-float(max_x), float(max_x))
+            lag_max_plot = float(np.max(np.abs(lags_fid))) if max_x is None else float(max_x)
+
         x_by_case = {}
         y_by_case = {}
         yerr_by_case = {}
@@ -812,15 +1078,29 @@ def plot_xi1d_resolution_comparison(
         for key_case in case_order:
             if canon not in unique_terms_by_case[key_case]:
                 continue
+
             entry = unique_terms_by_case[key_case][canon]
             x_by_case[key_case] = np.asarray(lags[key_case], dtype=float)
             y_by_case[key_case] = np.real(np.asarray(_entry_get(entry, "Xi1D_mean", "xi1d_mean")))
             yerr_by_case[key_case] = np.asarray(
-                _entry_get(entry, "Xi1D_sem", "xi1d_sem", default=np.zeros_like(y_by_case[key_case]), required=False)
+                _entry_get(
+                    entry,
+                    "Xi1D_sem",
+                    "xi1d_sem",
+                    default=np.zeros_like(y_by_case[key_case]),
+                    required=False,
+                )
             )
 
         case_order_term = [k for k in case_order if k in x_by_case]
-        xlim = (0.0, np.max(lags_fid)) if positive_lags_only else None
+
+        vertical_markers = None
+        if show_line_pair_markers and line_bundle is not None:
+            vertical_markers = _compute_line_pair_markers(
+                line_bundle=line_bundle,
+                lag_max=lag_max_plot,
+                positive_lags_only=positive_lags_only,
+            )
 
         fig = _plot_main_and_residual(
             x_by_case=x_by_case,
@@ -850,6 +1130,18 @@ def plot_xi1d_resolution_comparison(
             legend_title="Runs",
             legend_loc=legend_loc,
             xlim=xlim,
+            ylim=ylim,
+            residual_ylim=residual_ylim,
+            residual_mode="relative",
+            residual_relative_floor=residual_relative_floor,
+            vertical_markers=vertical_markers,
+            vertical_markers_on_residual=vertical_markers_on_residual,
+            vertical_marker_color=vertical_marker_color,
+            vertical_marker_lw=vertical_marker_lw,
+            vertical_marker_ls=vertical_marker_ls,
+            vertical_marker_alpha=vertical_marker_alpha,
+            vertical_marker_text_fontsize=vertical_marker_text_fontsize,
+            vertical_marker_text_alpha=vertical_marker_text_alpha,
             show=show,
             tight_layout=tight_layout,
         )
@@ -857,10 +1149,24 @@ def plot_xi1d_resolution_comparison(
 
     # Total figure
     lags_tot_fid = np.sort(np.asarray(lags_tot[fiducial_key], dtype=float))
-    xlim = (0.0, np.max(lags_tot_fid)) if positive_lags_only else None
+
+    if positive_lags_only:
+        lag_max_plot = float(np.max(lags_tot_fid)) if max_x is None else min(float(max_x), float(np.max(lags_tot_fid)))
+        xlim = (0.0, lag_max_plot)
+    else:
+        xlim = None if max_x is None else (-float(max_x), float(max_x))
+        lag_max_plot = float(np.max(np.abs(lags_tot_fid))) if max_x is None else float(max_x)
 
     x_by_case = {k: np.asarray(lags_tot[k], dtype=float) for k in case_order}
     y_by_case = {k: np.real(np.asarray(Xi1D_tot_mean[k])) for k in case_order}
+
+    vertical_markers = None
+    if show_line_pair_markers and line_bundle is not None:
+        vertical_markers = _compute_line_pair_markers(
+            line_bundle=line_bundle,
+            lag_max=lag_max_plot,
+            positive_lags_only=positive_lags_only,
+        )
 
     fig = _plot_main_and_residual(
         x_by_case=x_by_case,
@@ -890,6 +1196,18 @@ def plot_xi1d_resolution_comparison(
         legend_title="Runs",
         legend_loc=legend_loc,
         xlim=xlim,
+        ylim=ylim,
+        residual_ylim=residual_ylim,
+        residual_mode="relative",
+        residual_relative_floor=residual_relative_floor,
+        vertical_markers=vertical_markers,
+        vertical_markers_on_residual=vertical_markers_on_residual,
+        vertical_marker_color=vertical_marker_color,
+        vertical_marker_lw=vertical_marker_lw,
+        vertical_marker_ls=vertical_marker_ls,
+        vertical_marker_alpha=vertical_marker_alpha,
+        vertical_marker_text_fontsize=vertical_marker_text_fontsize,
+        vertical_marker_text_alpha=vertical_marker_text_alpha,
         show=show,
         tight_layout=tight_layout,
     )
