@@ -6,3 +6,4 @@ from . import overflux_tools as overflux_tools
 from . import P1D as P1D
 from . import Xi1D as Xi1D
 from . import plotting_utils as plotting_utils
+from . import toy_fields
